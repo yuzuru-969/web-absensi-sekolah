@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rekap Absensi Sekolah</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1>Rekap Absensi Sekolah</h1>
+  <p class="sub">Data kehadiran yang dikirim siswa lewat aplikasi absensi.</p>
+
+  <div class="tabs">
+    <button type="button" id="t-harian" class="aktif">Daftar harian</button>
+    <button type="button" id="t-kelas">Rekap per kelas</button>
+    <button type="button" id="t-siswa">Rekap per siswa</button>
+  </div>
+
+  <div class="filters">
+    <div><label for="f-tgl">Tanggal</label><input id="f-tgl" type="date"></div>
+    <div><label for="f-kelas">Kelas</label>
+      <select id="f-kelas"><option value="">Semua</option><option>X</option><option>XI</option><option>XII</option></select></div>
+    <div><label for="f-jur">Jurusan</label><input id="f-jur" type="text" placeholder="Semua"></div>
+    <div><label for="f-cari">Cari nama</label><input id="f-cari" type="text" placeholder="Nama siswa"></div>
+  </div>
+
+  <div class="bar">
+    <button class="primary" id="btn-refresh">Muat ulang</button>
+    <button id="btn-semua">Semua tanggal</button>
+    <button id="btn-csv">Unduh CSV</button>
+    <span class="stat" id="stat"></span>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="wrap" id="tabel"></div>
+</main>
+
+<script>
+var data = [];
+var mode = "harian";
+var $ = function(id){ return document.getElementById(id); };
+function pad(n){ return String(n).padStart(2, "0"); }
+function hariIni(){ var d = new Date(); return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()); }
+function tglId(s){ var p = s.split("-"); return p[2] + "/" + p[1] + "/" + p[0]; }
+function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function setStatus(t, err){ var s = $("status"); s.textContent = t; s.className = "status" + (err ? " err" : ""); }
+
+async function muat(){
+  setStatus("Memuat data…");
+  try {
+    var res = await fetch("/api/data");
+    if(!res.ok) throw new Error("Gagal memuat (" + res.status + ").");
+    data = await res.json();
+    setStatus("Terakhir dimuat " + new Date().toLocaleTimeString("id-ID") + ". Diperbarui otomatis tiap 30 detik.");
+    render();
+  } catch(e){
+    setStatus(e.message, true);
+  }
+}
+
+function saring(abaikanTanggal){
+  var tgl = abaikanTanggal ? "" : $("f-tgl").value;
+  var kelas = $("f-kelas").value;
+  var jur = $("f-jur").value.trim().toLowerCase();
+  var cari = $("f-cari").value.trim().toLowerCase();
+  return data.filter(function(r){
+    if(tgl && r.tanggal !== tgl) return false;
+    if(kelas && r.kelas !== kelas) return false;
+    if(jur && r.jurusan.toLowerCase().indexOf(jur) === -1) return false;
+    if(cari && r.nama.toLowerCase().indexOf(cari) === -1) return false;
+    return true;
+  });
+}
+
+function urut(a, b){
+  return a.kelas.localeCompare(b.kelas) || a.jurusan.localeCompare(b.jurusan) || a.absen - b.absen;
+}
+
+function tabelHarian(){
+  var list = saring(false).sort(urut);
+  $("stat").textContent = list.length + " siswa hadir";
+  if(!list.length) return '<div class="empty">Tidak ada data untuk filter ini.</div>';
+  var h = "<table><thead><tr><th>No</th><th>Tanggal</th><th>Jam</th><th>Nama</th><th>Kelas</th><th>Jurusan</th><th>No. absen</th><th>Lokasi</th></tr></thead><tbody>";
+  list.forEach(function(r, i){
+    h += "<tr><td>" + (i+1) + "</td><td>" + tglId(r.tanggal) + "</td><td>" + esc(r.jam) + "</td><td>" + esc(r.nama) +
+         "</td><td>" + esc(r.kelas) + "</td><td>" + esc(r.jurusan) + "</td><td>" + r.absen +
+         '</td><td><a href="https://www.google.com/maps?q=' + r.lat + "," + r.lng + '" target="_blank" rel="noopener">Lihat peta</a></td></tr>';
+  });
+  return h + "</tbody></table>";
+}
+
+function tabelKelas(){
+  var list = saring(false), grup = {};
+  list.forEach(function(r){
+    var k = r.kelas + "|" + r.jurusan.toLowerCase();
+    if(!grup[k]) grup[k] = { kelas: r.kelas, jurusan: r.jurusan, jumlah: 0 };
+    grup[k].jumlah++;
+  });
+  var baris = Object.keys(grup).map(function(k){ return grup[k]; }).sort(function(a, b){
+    return a.kelas.localeCompare(b.kelas) || a.jurusan.localeCompare(b.jurusan);
+  });
+  $("stat").textContent = list.length + " kehadiran";
+  if(!baris.length) return '<div class="empty">Tidak ada data untuk filter ini.</div>';
+  var h = "<table><thead><tr><th>No</th><th>Kelas</th><th>Jurusan</th><th>Jumlah hadir</th></tr></thead><tbody>";
+  baris.forEach(function(b, i){
+    h += "<tr><td>" + (i+1) + "</td><td>" + esc(b.kelas) + "</td><td>" + esc(b.jurusan) + "</td><td>" + b.jumlah + "</td></tr>";
+  });
+  return h + '</tbody><tfoot><tr><td colspan="3">Total</td><td>' + list.length + "</td></tr></tfoot></table>";
+}
+
+function tabelSiswa(){
+  var list = saring(true), grup = {};
+  list.forEach(function(r){
+    var k = r.nama.toLowerCase() + "|" + r.kelas + "|" + r.jurusan.toLowerCase() + "|" + r.absen;
+    if(!grup[k]) grup[k] = { nama: r.nama, kelas: r.kelas, jurusan: r.jurusan, absen: r.absen, hari: 0, terakhir: r.tanggal };
+    grup[k].hari++;
+    if(r.tanggal > grup[k].terakhir) grup[k].terakhir = r.tanggal;
+  });
+  var baris = Object.keys(grup).map(function(k){ return grup[k]; }).sort(urut);
+  $("stat").textContent = baris.length + " siswa";
+  if(!baris.length) return '<div class="empty">Tidak ada data untuk filter ini.</div>';
+  var h = "<table><thead><tr><th>No</th><th>Nama</th><th>Kelas</th><th>Jurusan</th><th>No. absen</th><th>Jumlah hari hadir</th><th>Terakhir hadir</th></tr></thead><tbody>";
+  baris.forEach(function(b, i){
+    h += "<tr><td>" + (i+1) + "</td><td>" + esc(b.nama) + "</td><td>" + esc(b.kelas) + "</td><td>" + esc(b.jurusan) +
+         "</td><td>" + b.absen + "</td><td>" + b.hari + "</td><td>" + tglId(b.terakhir) + "</td></tr>";
+  });
+  return h + "</tbody></table>";
+}
+
+function render(){
+  $("tabel").innerHTML = mode === "kelas" ? tabelKelas() : mode === "siswa" ? tabelSiswa() : tabelHarian();
+  $("f-tgl").disabled = (mode === "siswa");
+}
+
+function ganti(m){
+  mode = m;
+  ["harian", "kelas", "siswa"].forEach(function(x){ $("t-" + x).className = (x === m) ? "aktif" : ""; });
+  render();
+}
+
+$("f-tgl").value = hariIni();
+["f-tgl", "f-kelas", "f-jur", "f-cari"].forEach(function(id){
+  $(id).addEventListener("input", render);
+  $(id).addEventListener("change", render);
+});
+$("t-harian").addEventListener("click", function(){ ganti("harian"); });
+$("t-kelas").addEventListener("click", function(){ ganti("kelas"); });
+$("t-siswa").addEventListener("click", function(){ ganti("siswa"); });
+$("btn-refresh").addEventListener("click", muat);
+$("btn-semua").addEventListener("click", function(){ $("f-tgl").value = ""; render(); });
+$("btn-csv").addEventListener("click", function(){
+  window.location = "/api/export.csv?tanggal=" + encodeURIComponent($("f-tgl").value);
+});
+muat();
+setInterval(muat, 30000);
+</script>
+</body>
+</html>
